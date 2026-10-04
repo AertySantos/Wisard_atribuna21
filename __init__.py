@@ -16,6 +16,12 @@ discriminante = 0
 # Lista de stop words
 stop_words = []
 
+# Corte do vocabulario na opcao 2 (frequencia de documento):
+# termo precisa aparecer em pelo menos MIN_DOCS documentos
+MIN_DOCS = 5
+# e em no maximo MAX_PROP_DOCS da colecao (0.5 = metade dos documentos)
+MAX_PROP_DOCS = 0.5
+
 # Carregue o modelo do spaCy para o português
 nlp = spacy.load("pt_core_news_sm")
 
@@ -128,17 +134,15 @@ def busca_frequencia_mod(arquivo, palavra):
 
 
 def carregar_freq_inv(arquivo):
-    freq_inv = []
+    termos = []
+    idfs = []
     with open(arquivo, 'r', encoding='iso-8859-1') as file:
         for linha in file:
             partes = linha.split(":")
             if len(partes) == 2:
-                chave = partes[0].strip()
-                # valor = partes[1].strip()
-                freq_inv.append(chave)
-            # print(f"{chave}:{valor}")
-    # Se a palavra não for encontrada no arquivo
-    return freq_inv
+                termos.append(partes[0].strip())
+                idfs.append(float(partes[1].strip()))
+    return termos, idfs
 
 
 def ordenar_por_frequencia():
@@ -556,23 +560,12 @@ def adicionar_linha_csv(nome_arquivo, nova_linha):
     dircsv = "csv/"
     caminho_csv = os.path.join(dircsv, nome_arquivo)
 
-    # Crie o diretório se ele ainda não existir
-    if not os.path.exists(dircsv):
-        os.makedirs(dircsv)
+    # Crie o diretório se ele ainda não existir (inclui subpastas como csv/aTribuna-21dir/)
+    os.makedirs(os.path.dirname(caminho_csv), exist_ok=True)
 
-    # Se o arquivo não existe, cria e escreve a nova linha
-    if not os.path.exists(caminho_csv):
-        with open(caminho_csv, "w") as arq:
-            arq.write(nova_linha)
-    else:
-        # Abre o arquivo CSV em modo de leitura e lê os dados existentes
-        with open(caminho_csv, 'r') as file:
-            dados = file.read()
-        dados += f"\n{nova_linha}"
-
-        # Abre o arquivo CSV em modo de escrita e escreve os dados atualizados
-        with open(caminho_csv, 'w') as file:
-            file.write(dados)
+    # Acrescenta a linha no fim do arquivo (cria o arquivo se nao existir)
+    with open(caminho_csv, "a") as arq:
+        arq.write(f"{nova_linha}\n")
 
 
 def peso_cent(pasta, arquivo, freq_inv, valor):
@@ -596,7 +589,7 @@ def peso_cent(pasta, arquivo, freq_inv, valor):
         vetor1 = texto.split()
 
     for i in range(min(len(freq_inv), len(vetor1))):
-        if float(freq_inv[i]) > limite and float(vetor1[i]) >= 1:
+        if float(freq_inv[i]) > limite and float(vetor1[i]) > 0:
             vetor.append(1)
         else:
             vetor.append(0)
@@ -639,7 +632,7 @@ def peso_simi(pasta, arquivo, freq_inv, valor):
         vetor1 = texto.split()
 
     for i in range(min(len(freq_inv), len(vetor1))):
-        if float(freq_inv[i]) > limite and float(vetor1[i]) >= 1:
+        if float(freq_inv[i]) > limite and float(vetor1[i]) > 0:
             vetor.append(1)
         else:
             vetor.append(0)
@@ -657,44 +650,6 @@ def peso_simi(pasta, arquivo, freq_inv, valor):
             if not cont == tam:
                 nova_linha += f","
 
-    tabela = f"{pasta}.csv"
-    # print(tabela)
-    adicionar_linha_csv(tabela, nova_linha)
-
-def peso_arq(pasta, arquivo, freq_inv):
-
-    diretorio_p = f"arq_pesos/{pasta}"
-    # Inicialize uma lista vazia
-    vetor = []
-    # Crie a pasta se ela ainda não existir
-    if not os.path.exists(diretorio_p):
-        os.makedirs(diretorio_p)
-
-    nome_arquivo = os.path.basename(arquivo)  # Obtém o nome do arquivo
-    # Salva as frequências de palavras em arquivos
-    caminho = os.path.join(diretorio_p, nome_arquivo)
-
-    for palavra in freq_inv:
-
-        diretorio = f"frequencia/{pasta}"
-        caminhoF = os.path.join(diretorio, nome_arquivo)
-        freq_pal = busca_frequencia(caminhoF, palavra)
-        # print(f"{palavra}:{caminhoF}")
-        if freq_pal > 0:
-            ponderacao = round(
-                float(freq_inv[palavra]*(1 + math.log(freq_pal))), 2)
-            vetor.append(ponderacao)
-        else:
-            vetor.append(0)
-
-    # Fora do loop, escreva o vetor em um arquivo
-    nova_linha = ""
-    with open(caminho, "w") as arq:
-        for freq in vetor:
-            arq.write(f'{freq}\n')
-            nova_linha += f"{freq},"
-    # tabela = nome_tabela(nome_arquivo)
-    nova_linha += f"{pasta}"
     tabela = f"{pasta}.csv"
     # print(tabela)
     adicionar_linha_csv(tabela, nova_linha)
@@ -737,8 +692,8 @@ def freq_invertida():
     caminho_arqfi = os.path.join("arq_fi", "fi.txt")
 
     with open(nome_arquivo, "r", encoding="iso-8859-1") as arquivo:
-        texto = arquivo.read().lower()
-        texto = texto.translate(str.maketrans('', '', string.punctuation))
+        texto = arquivo.read()
+        #texto = texto.translate(str.maketrans('', '', string.punctuation))
         palavras = texto.split()  # Divide o texto em palavras (separadas por espaço em branco)
 
         for pasta in palavras:
@@ -761,8 +716,15 @@ def freq_invertida():
                                     else:
                                         freq_arq[chave] += 1
 
+    # remove termos raros (erros, nomes proprios) e comuns demais
+    max_docs = MAX_PROP_DOCS * qtd_docs
+    freq_filtrada = {chave: df for chave, df in freq_arq.items()
+                     if MIN_DOCS <= df <= max_docs}
+    print(f"\nVocabulario: {len(freq_arq)} termos -> {len(freq_filtrada)} termos "
+          f"(em {MIN_DOCS} a {int(max_docs)} de {qtd_docs} documentos)")
+
     palavras_frequentes = sorted(
-        freq_arq.items(), key=lambda x: x[1], reverse=True)
+        freq_filtrada.items(), key=lambda x: x[1], reverse=True)
 
     # with open("arq_fi/fir4.txt", "w", encoding="iso-8859-1") as arquivo:
     #    for palavraR,freq in palavras_frequentes:
@@ -829,12 +791,11 @@ def peso_bin(pasta, arquivo, freq_inv):
 # Função para processar um arquivo .txt e contar palavras
 
 
-def peso_arq(pasta, arquivo, freq_inv):
+def peso_arq(pasta, arquivo, indices, idfs):
 
     diretorio_p = f"arq_pesos/{pasta}"
-    # print(diretorio_p)
-    # Inicialize uma lista vazia
-    vetor = [0]*len(freq_inv)
+    # Inicialize o vetor com zeros (um peso por termo)
+    vetor = [0]*len(idfs)
     # Crie a pasta se ela ainda não existir
     if not os.path.exists(diretorio_p):
         os.makedirs(diretorio_p)
@@ -848,31 +809,20 @@ def peso_arq(pasta, arquivo, freq_inv):
         for line in file:
             parts = line.strip().split(':')
             if len(parts) == 2:
+                # os arquivos de frequencia ja estao lematizados
                 key = parts[0].strip()
-                if not key.isdigit():
-                    radical = extrair_radical(key)
-                    radical = remover_acentos(radical)
-                    # print(radical)
-                    if radical in freq_inv:
-                        indice = freq_inv.index(radical)
-                        vetor[indice] = 1
+                tf = int(parts[1].strip())
+                if key in indices and tf > 0:
+                    indice = indices[key]
+                    # TF-IDF: idf * (1 + log(tf))
+                    vetor[indice] = round(idfs[indice] * (1 + math.log(tf)), 2)
 
     # Fora do loop, escreva o vetor em um arquivo
+    valores = [str(freq) for freq in vetor]
     with open(caminho, "w") as arq:
-        for freq in vetor:
-            arq.write(f'{freq}\n')
+        arq.write("\n".join(valores) + "\n")
 
-    # Fora do loop, escreva o vetor em um arquivo
-
-    nova_linha = f"{pasta},"
-    tam = len(vetor)
-    cont = 0
-
-    for freq in vetor:
-        cont += 1
-        nova_linha += f"{freq}"
-        if not cont == tam:
-            nova_linha += f","
+    nova_linha = f"{pasta}," + ",".join(valores)
 
     tabela = f"{pasta}.csv"
     adicionar_linha_csv(tabela, nova_linha)
@@ -907,11 +857,11 @@ def main():
 
         try:
             with open(nome_arquivo, "r", encoding="iso-8859-1") as arquivo:
-                texto = arquivo.read().lower()
-                texto = texto.translate(
-                    str.maketrans('', '', string.punctuation))
+                texto = arquivo.read()
+                #texto = texto.translate(
+                #    str.maketrans('', '', string.punctuation))
                 palavras = texto.split()  # Divide o texto em palavras (separadas por espaço em branco)
-
+                    
                 for palavra in palavras:
                     abrePasta(palavra)
                     frequencia_palavras.clear()  # limpar dicionario principal
@@ -929,13 +879,14 @@ def main():
 
     elif op == "3":
 
-        freq_inv = []
-        freq_inv = carregar_freq_inv("arq_fi/fi.txt")
+        termos, idfs = carregar_freq_inv("arq_fi/fi.txt")
+        # posicao de cada termo no vetor (montado uma unica vez)
+        indices = {termo: i for i, termo in enumerate(termos)}
 
         # Percorre os arquivos no diretório e conta as palavras
         with open(nome_arquivo, "r", encoding="iso-8859-1") as arquivo:
-            texto = arquivo.read().lower()
-            texto = texto.translate(str.maketrans('', '', string.punctuation))
+            texto = arquivo.read()
+           # texto = texto.translate(str.maketrans('', '', string.punctuation))
             palavras = texto.split()  # Divide o texto em palavras (separadas por espaço em branco)
 
             for pasta in palavras:
@@ -949,7 +900,7 @@ def main():
 
                     if arq2.endswith('.txt'):
                         caminho_arq2 = os.path.join(diretorio, arq2)
-                        peso_arq(pasta, caminho_arq2, freq_inv)
+                        peso_arq(pasta, caminho_arq2, indices, idfs)
 
                     sys.stdout.write('\r'+f'[✔] Processando {pasta}: '+str(max)+'/'+str(
                         len(tam))+' ' + '{:.2f}'.format(max/len(tam)*100)+'%')
